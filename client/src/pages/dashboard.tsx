@@ -88,6 +88,8 @@ export default function Dashboard() {
   const totalPnl = status?.totalPnl ?? "0.00";
   const winRate = status?.winRate ?? "0";
   const totalTrades = status?.totalTrades ?? 0;
+  const openPositions = status?.openPositions ?? 0;
+  const lastSignal = status?.lastSignal ?? null;
   const isLive = tradingMode === "live";
 
   return (
@@ -180,7 +182,20 @@ export default function Dashboard() {
           </motion.div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        {lastSignal && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-primary/5 border border-primary/20 rounded-lg px-4 py-2 flex items-center gap-3"
+          >
+            <Activity className="h-4 w-4 text-primary animate-pulse" />
+            <p className="text-sm font-mono text-primary" data-testid="text-last-signal">
+              {lastSignal}
+            </p>
+          </motion.div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
           <StatCard
             label="Strategy Mode"
             value={currentMode}
@@ -197,13 +212,13 @@ export default function Dashboard() {
           />
           <StatCard
             label="Wallet Balance"
-            value={`${walletBalance} SOL`}
+            value={`${Number(walletBalance).toFixed(3)} SOL`}
             icon={Wallet}
             animate={true}
           />
           <StatCard
-            label="Total PNL"
-            value={`${Number(totalPnl) > 0 ? '+' : ''}${totalPnl}%`}
+            label="Avg PNL"
+            value={`${Number(totalPnl) > 0 ? '+' : ''}${Number(totalPnl).toFixed(2)}%`}
             icon={TrendingUp}
             trend={Number(totalPnl) >= 0 ? "up" : "down"}
             color={Number(totalPnl) >= 0 ? "primary" : "destructive"}
@@ -211,10 +226,18 @@ export default function Dashboard() {
           />
           <StatCard
             label="Win Rate"
-            value={`${winRate}%`}
+            value={`${Number(winRate).toFixed(1)}%`}
             subValue={`${totalTrades} trades`}
             icon={Trophy}
-            color={Number(winRate) >= 60 ? "primary" : "default"}
+            color={Number(winRate) >= 50 ? "primary" : "default"}
+            animate={true}
+          />
+          <StatCard
+            label="Open Positions"
+            value={`${openPositions}`}
+            subValue="max 5"
+            icon={Activity}
+            color={openPositions > 0 ? "secondary" : "default"}
             animate={true}
           />
         </div>
