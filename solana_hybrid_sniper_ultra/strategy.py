@@ -1,32 +1,25 @@
 class HybridStrategy:
     def __init__(self):
-        self.current_mode = "NONE"
+        self.current_mode = "SCANNING"
 
-    def determine_mode(self, token_data, predictions):
-        age = token_data.get("age", 0)
-        liquidity = token_data.get("liquidity", 0)
-        pump_prob = predictions.get("pump_probability", 0)
+    def analyze(self, features, predictions):
+        age = features.get('age_seconds', 0)
+        liq = features.get('liquidity_usd', 0)
+        pump_prob = predictions.get('pump_probability', 0)
+        dump_risk = predictions.get('dump_risk', 1)
+        vol_change = features.get('volume_change_1m', 0)
 
-        if age < 120 and liquidity < 150000 and pump_prob > 0.55:
+        if age < 120 and liq < 50000 and pump_prob > 0.65:
             self.current_mode = "SNIPER"
-            return self.sniper_mode(token_data)
-        elif pump_prob > 0.60:
+            return self._generate_signal("BUY", 1.0, 15.0)
+        if pump_prob > 0.75 and vol_change > 2.0:
             self.current_mode = "MG"
-            return self.mg_mode(token_data)
-        elif pump_prob > 0.80:
+            return self._generate_signal("BUY", 0.5, 5.0)
+        if pump_prob > 0.85 and dump_risk < 0.2:
             self.current_mode = "HWR"
-            return self.hwr_mode(token_data)
-        
+            return self._generate_signal("BUY", 0.2, 2.0)
+        self.current_mode = "SCANNING"
         return None
 
-    def sniper_mode(self, token_data):
-        print("Executing SNIPER mode")
-        pass
-
-    def mg_mode(self, token_data):
-        print("Executing MG mode")
-        pass
-
-    def hwr_mode(self, token_data):
-        print("Executing HWR mode")
-        pass
+    def _generate_signal(self, action, size, slippage):
+        return {"action": action, "size_sol": size, "slippage": slippage, "timestamp": "now"}
