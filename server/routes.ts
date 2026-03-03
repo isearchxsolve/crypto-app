@@ -8,7 +8,6 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  // Seed the database with some example bot data on startup
   storage.seedInitialData().catch(console.error);
 
   app.get(api.status.get.path, async (req, res) => {
@@ -24,6 +23,36 @@ export async function registerRoutes(
   app.get(api.candidates.list.path, async (req, res) => {
     const candidatesList = await storage.getCandidates();
     res.json(candidatesList);
+  });
+
+  app.post("/api/bot/trading-mode", async (req, res) => {
+    const { mode, confirmed } = req.body;
+    if (!mode || !["paper", "live"].includes(mode)) {
+      return res.status(400).json({ message: "Invalid trading mode. Use 'paper' or 'live'." });
+    }
+    if (mode === "live" && !confirmed) {
+      return res.status(400).json({ message: "Live trading requires explicit confirmation. Set confirmed: true." });
+    }
+    const status = await storage.updateTradingMode(mode);
+    res.json(status);
+  });
+
+  app.post("/api/bot/toggle", async (req, res) => {
+    const { isRunning } = req.body;
+    if (typeof isRunning !== "boolean") {
+      return res.status(400).json({ message: "isRunning must be boolean" });
+    }
+    const status = await storage.updateBotRunning(isRunning);
+    res.json(status);
+  });
+
+  app.post("/api/bot/strategy-mode", async (req, res) => {
+    const { mode } = req.body;
+    if (!mode || !["SNIPER", "MG", "HWR", "AUTO"].includes(mode)) {
+      return res.status(400).json({ message: "Invalid strategy mode" });
+    }
+    const status = await storage.updateStrategyMode(mode);
+    res.json(status);
   });
 
   return httpServer;

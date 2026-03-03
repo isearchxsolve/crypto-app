@@ -7,14 +7,60 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { AlertCircle, Play, Pause, RefreshCw, Crosshair, TrendingUp, Wallet, ShieldCheck, Flame, Activity } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertCircle, Play, Pause, RefreshCw, Crosshair, TrendingUp, Wallet, ShieldCheck, Flame, Activity, Zap, Trophy, BarChart3 } from "lucide-react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 export default function Dashboard() {
   const { data: status, isLoading: statusLoading, error: statusError } = useBotStatus();
   const { data: trades, isLoading: tradesLoading } = useTrades();
   const { data: candidates, isLoading: candidatesLoading } = useCandidates();
+  const { toast } = useToast();
+  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
+
+  const toggleTradingMode = useMutation({
+    mutationFn: async (mode: string) => {
+      const res = await apiRequest("POST", "/api/bot/trading-mode", { mode, confirmed: mode === "live" });
+      return res.json();
+    },
+    onSuccess: (_, mode) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+      toast({
+        title: mode === "live" ? "LIVE Trading Activated" : "Paper Trading Activated",
+        description: mode === "live" ? "Real SOL will be used for transactions" : "Switched to simulated trading",
+        variant: mode === "live" ? "destructive" : "default",
+      });
+    },
+  });
+
+  const toggleBot = useMutation({
+    mutationFn: async (isRunning: boolean) => {
+      const res = await apiRequest("POST", "/api/bot/toggle", { isRunning });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+    },
+  });
+
+  const changeStrategy = useMutation({
+    mutationFn: async (mode: string) => {
+      const res = await apiRequest("POST", "/api/bot/strategy-mode", { mode });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bot/status"] });
+      toast({ title: "Strategy Updated" });
+    },
+  });
 
   if (statusError) {
     return (
@@ -22,7 +68,7 @@ export default function Dashboard() {
         <div className="flex h-full items-center justify-center">
           <div className="text-destructive flex flex-col items-center gap-4 border border-destructive/20 p-8 rounded-lg bg-destructive/5">
             <AlertCircle className="h-12 w-12" />
-            <h2 className="text-xl font-bold uppercase">System Malfunction</h2>
+            <h2 className="text-xl font-bold uppercase" data-testid="text-error-title">System Malfunction</h2>
             <p>Could not connect to bot mainframe. Check server connection.</p>
           </div>
         </div>
@@ -30,105 +76,179 @@ export default function Dashboard() {
     );
   }
 
-  // Ensure arrays are arrays (handling API response potential issues)
   const tradeList = Array.isArray(trades) ? trades : [];
   const candidateList = Array.isArray(candidates) ? candidates : [];
-  
-  // Safe defaults for status
+
   const isRunning = status?.isRunning ?? false;
   const currentMode = status?.mode ?? "IDLE";
+  const tradingMode = status?.tradingMode ?? "paper";
   const walletBalance = status?.walletBalance ?? "0.00";
   const totalPnl = status?.totalPnl ?? "0.00";
+  const winRate = status?.winRate ?? "0";
+  const totalTrades = status?.totalTrades ?? 0;
+  const isLive = tradingMode === "live";
 
   return (
     <Layout>
-      <div className="space-y-8">
-        {/* Header Actions */}
+      <div className="space-y-6">
         <div className="flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
           <div>
-            <h1 className="text-3xl font-bold font-display uppercase tracking-widest text-white">
+            <h1 className="text-3xl font-bold font-display uppercase tracking-widest text-white" data-testid="text-page-title">
               Command <span className="text-primary text-glow">Center</span>
             </h1>
             <p className="text-muted-foreground mt-1 text-sm font-mono">
               Live Connection: <span className="text-primary">wss://sol-mainnet-beta...</span>
             </p>
           </div>
-          <div className="flex gap-3">
-            <Button 
-              variant="outline" 
-              className="border-primary/50 text-primary hover:bg-primary/10 hover:text-primary transition-all shadow-[0_0_15px_-5px_rgba(38,217,98,0.3)]"
-            >
-              <RefreshCw className="mr-2 h-4 w-4" /> Sync Chain
-            </Button>
-            <Button 
-              className={isRunning 
-                ? "bg-destructive text-white hover:bg-destructive/80 shadow-[0_0_20px_-5px_rgba(239,68,68,0.5)]" 
+
+          <div className="flex items-center gap-4">
+            <div className={cn(
+              "flex items-center gap-3 px-4 py-2 rounded-lg border transition-all",
+              isLive
+                ? "border-destructive/50 bg-destructive/10 shadow-[0_0_20px_-5px_rgba(239,68,68,0.4)]"
+                : "border-primary/50 bg-primary/10 shadow-[0_0_20px_-5px_rgba(38,217,98,0.3)]"
+            )}>
+              <Label htmlFor="trading-mode-toggle" className={cn(
+                "text-xs font-bold uppercase tracking-wider cursor-pointer",
+                !isLive ? "text-primary" : "text-muted-foreground"
+              )}>
+                Paper
+              </Label>
+              <Switch
+                id="trading-mode-toggle"
+                data-testid="switch-trading-mode"
+                checked={isLive}
+                onCheckedChange={(checked) => {
+                  if (checked) {
+                    setShowLiveConfirm(true);
+                  } else {
+                    toggleTradingMode.mutate("paper");
+                  }
+                }}
+                disabled={toggleTradingMode.isPending}
+              />
+              <Label htmlFor="trading-mode-toggle" className={cn(
+                "text-xs font-bold uppercase tracking-wider cursor-pointer",
+                isLive ? "text-destructive" : "text-muted-foreground"
+              )}>
+                Live
+              </Label>
+              {isLive && (
+                <span className="ml-1 block h-2 w-2 rounded-full bg-destructive animate-pulse" />
+              )}
+            </div>
+
+            <Select value={currentMode} onValueChange={(v) => changeStrategy.mutate(v)}>
+              <SelectTrigger className="w-[140px] bg-black/40 border-border/50" data-testid="select-strategy-mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="AUTO">AUTO</SelectItem>
+                <SelectItem value="SNIPER">SNIPER</SelectItem>
+                <SelectItem value="MG">MG</SelectItem>
+                <SelectItem value="HWR">HWR</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Button
+              data-testid="button-toggle-bot"
+              onClick={() => toggleBot.mutate(!isRunning)}
+              disabled={toggleBot.isPending}
+              className={isRunning
+                ? "bg-destructive text-white hover:bg-destructive/80 shadow-[0_0_20px_-5px_rgba(239,68,68,0.5)]"
                 : "bg-primary text-black hover:bg-primary/90 shadow-[0_0_20px_-5px_rgba(38,217,98,0.5)]"
               }
             >
               {isRunning ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
-              {isRunning ? "STOP BOT" : "START ENGINE"}
+              {isRunning ? "STOP" : "START"}
             </Button>
           </div>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard 
-            label="Current Mode" 
-            value={currentMode} 
+        {isLive && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            className="bg-destructive/10 border border-destructive/30 rounded-lg p-3 flex items-center gap-3"
+          >
+            <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0" />
+            <p className="text-sm text-destructive font-mono" data-testid="text-live-warning">
+              LIVE TRADING ACTIVE — Real SOL will be used for transactions. Ensure your wallet is funded and private key is configured.
+            </p>
+          </motion.div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard
+            label="Strategy Mode"
+            value={currentMode}
             icon={Crosshair}
             color="secondary"
             animate={true}
           />
-          <StatCard 
-            label="Status" 
-            value={isRunning ? "ONLINE" : "OFFLINE"} 
-            icon={ShieldCheck}
-            color={isRunning ? "primary" : "destructive"}
+          <StatCard
+            label="Trading Mode"
+            value={isLive ? "LIVE" : "PAPER"}
+            icon={isLive ? Zap : ShieldCheck}
+            color={isLive ? "destructive" : "primary"}
             animate={true}
           />
-          <StatCard 
-            label="Wallet Balance" 
-            value={`${walletBalance} SOL`} 
-            subValue="≈ $1,240.50" 
+          <StatCard
+            label="Wallet Balance"
+            value={`${walletBalance} SOL`}
             icon={Wallet}
             animate={true}
           />
-          <StatCard 
-            label="Total PNL" 
-            value={`${Number(totalPnl) > 0 ? '+' : ''}${totalPnl}%`} 
+          <StatCard
+            label="Total PNL"
+            value={`${Number(totalPnl) > 0 ? '+' : ''}${totalPnl}%`}
             icon={TrendingUp}
             trend={Number(totalPnl) >= 0 ? "up" : "down"}
             color={Number(totalPnl) >= 0 ? "primary" : "destructive"}
             animate={true}
           />
+          <StatCard
+            label="Win Rate"
+            value={`${winRate}%`}
+            subValue={`${totalTrades} trades`}
+            icon={Trophy}
+            color={Number(winRate) >= 60 ? "primary" : "default"}
+            animate={true}
+          />
         </div>
 
-        {/* Main Content Area */}
         <Tabs defaultValue="trades" className="space-y-4">
           <TabsList className="bg-black/40 border border-border/50 p-1">
-            <TabsTrigger 
+            <TabsTrigger
               value="trades"
+              data-testid="tab-trades"
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary font-display uppercase tracking-wider"
             >
+              <Activity className="mr-2 h-4 w-4" />
               Live Trades
             </TabsTrigger>
-            <TabsTrigger 
+            <TabsTrigger
               value="candidates"
+              data-testid="tab-candidates"
               className="data-[state=active]:bg-secondary/20 data-[state=active]:text-secondary font-display uppercase tracking-wider"
             >
+              <Flame className="mr-2 h-4 w-4" />
               Sniper Candidates
             </TabsTrigger>
           </TabsList>
 
-          {/* TRADES TAB */}
           <TabsContent value="trades" className="space-y-4">
             <Card className="bg-card/40 border-border/50 backdrop-blur-sm">
               <CardHeader>
                 <CardTitle className="text-lg font-display uppercase tracking-wider flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-primary" />
-                  Recent Execution Log
+                  <BarChart3 className="h-5 w-5 text-primary" />
+                  Execution Log
+                  <Badge variant="outline" className={cn(
+                    "ml-auto text-[10px] border-0",
+                    isLive ? "bg-destructive/20 text-destructive" : "bg-primary/20 text-primary"
+                  )} data-testid="badge-trading-mode">
+                    {isLive ? "LIVE" : "PAPER"}
+                  </Badge>
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -143,13 +263,12 @@ export default function Dashboard() {
             </Card>
           </TabsContent>
 
-          {/* CANDIDATES TAB */}
           <TabsContent value="candidates" className="space-y-4">
             <Card className="bg-card/40 border-border/50 backdrop-blur-sm">
               <CardHeader>
                 <CardTitle className="text-lg font-display uppercase tracking-wider flex items-center gap-2">
                   <Flame className="h-5 w-5 text-secondary" />
-                  Detected Opportunities (Mempool)
+                  Detected Opportunities
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -166,25 +285,28 @@ export default function Dashboard() {
                           <TableHead className="text-xs font-bold uppercase tracking-wider">Address</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Liquidity</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Pump Prob.</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Dump Risk</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Age</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider">Qualified</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Action</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {candidateList.length === 0 ? (
                            <TableRow>
-                             <TableCell colSpan={6} className="text-center h-24 text-muted-foreground">
+                             <TableCell colSpan={8} className="text-center h-24 text-muted-foreground" data-testid="text-no-candidates">
                                Scanning mempool for new pairs...
                              </TableCell>
                            </TableRow>
                         ) : (
-                          candidateList.map((cand, i) => (
+                          candidateList.map((cand: any, i: number) => (
                             <motion.tr
                               key={cand.id}
                               initial={{ opacity: 0, y: 10 }}
                               animate={{ opacity: 1, y: 0 }}
                               transition={{ delay: i * 0.05 }}
                               className="border-border/40 hover:bg-white/5 transition-colors"
+                              data-testid={`row-candidate-${cand.id}`}
                             >
                               <TableCell className="font-bold">
                                 <span className="text-secondary">$</span>{cand.tokenSymbol}
@@ -192,20 +314,33 @@ export default function Dashboard() {
                               <TableCell className="font-mono text-xs text-muted-foreground">
                                 {cand.tokenAddress.substring(0, 4)}...{cand.tokenAddress.substring(cand.tokenAddress.length - 4)}
                               </TableCell>
-                              <TableCell className="text-right font-mono text-sm">${cand.liquidity}</TableCell>
+                              <TableCell className="text-right font-mono text-sm">${Number(cand.liquidity).toLocaleString()}</TableCell>
                               <TableCell className="text-right">
                                 <Badge variant="outline" className={cn(
                                   "border-0 font-bold",
-                                  Number(cand.pumpProbability) > 80 ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                                  Number(cand.pumpProbability) > 0.8 ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
                                 )}>
-                                  {cand.pumpProbability}%
+                                  {(Number(cand.pumpProbability) * 100).toFixed(0)}%
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Badge variant="outline" className={cn(
+                                  "border-0 font-bold",
+                                  Number(cand.dumpRisk) < 0.2 ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+                                )}>
+                                  {(Number(cand.dumpRisk || 0) * 100).toFixed(0)}%
                                 </Badge>
                               </TableCell>
                               <TableCell className="text-right font-mono text-xs text-muted-foreground">
                                 {cand.ageSeconds}s
                               </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-[10px] border-secondary/50 text-secondary">
+                                  {cand.qualifiedMode || "—"}
+                                </Badge>
+                              </TableCell>
                               <TableCell className="text-right">
-                                <Button size="sm" variant="secondary" className="h-7 text-xs bg-secondary/20 hover:bg-secondary/40 text-secondary border border-secondary/50">
+                                <Button size="sm" variant="secondary" className="h-7 text-xs bg-secondary/20 hover:bg-secondary/40 text-secondary border border-secondary/50" data-testid={`button-snipe-${cand.id}`}>
                                   SNIPE
                                 </Button>
                               </TableCell>
@@ -221,6 +356,35 @@ export default function Dashboard() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <AlertDialog open={showLiveConfirm} onOpenChange={setShowLiveConfirm}>
+        <AlertDialogContent className="bg-card border-destructive/50">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-destructive flex items-center gap-2" data-testid="text-live-confirm-title">
+              <Zap className="h-5 w-5" />
+              Enable LIVE Trading?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p>This will switch the bot to execute real transactions on Solana mainnet using your configured wallet.</p>
+              <ul className="list-disc list-inside text-sm space-y-1 text-destructive/80">
+                <li>Real SOL will be spent on trades</li>
+                <li>Trades are irreversible once confirmed on-chain</li>
+                <li>Ensure your private key and RPC are properly configured</li>
+              </ul>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-live">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-live"
+              className="bg-destructive text-white hover:bg-destructive/80"
+              onClick={() => toggleTradingMode.mutate("live")}
+            >
+              I understand, enable LIVE trading
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   );
 }

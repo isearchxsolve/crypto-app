@@ -10,16 +10,19 @@ interface Trade {
   tokenSymbol: string;
   type: string;
   mode: string;
+  tradingMode?: string;
   amount: string;
   price: string;
   pnl: string | null;
+  exitPrice?: string | null;
+  txHash?: string | null;
   timestamp: string;
 }
 
 export function LiveFeedTable({ trades }: { trades: Trade[] }) {
   if (trades.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground border border-dashed border-border/50 rounded-lg bg-black/20">
+      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground border border-dashed border-border/50 rounded-lg bg-black/20" data-testid="text-no-trades">
         <Activity className="h-8 w-8 mb-3 opacity-20" />
         <p>No recent trade activity detected</p>
       </div>
@@ -31,12 +34,13 @@ export function LiveFeedTable({ trades }: { trades: Trade[] }) {
       <Table>
         <TableHeader className="bg-white/5">
           <TableRow className="border-border/50 hover:bg-transparent">
-            <TableHead className="w-[100px] text-xs font-bold uppercase tracking-wider">Time</TableHead>
+            <TableHead className="w-[80px] text-xs font-bold uppercase tracking-wider">Time</TableHead>
             <TableHead className="text-xs font-bold uppercase tracking-wider">Token</TableHead>
             <TableHead className="text-xs font-bold uppercase tracking-wider">Type</TableHead>
-            <TableHead className="text-xs font-bold uppercase tracking-wider">Mode</TableHead>
-            <TableHead className="text-right text-xs font-bold uppercase tracking-wider">Amount</TableHead>
-            <TableHead className="text-right text-xs font-bold uppercase tracking-wider">Price</TableHead>
+            <TableHead className="text-xs font-bold uppercase tracking-wider">Strategy</TableHead>
+            <TableHead className="text-xs font-bold uppercase tracking-wider">Env</TableHead>
+            <TableHead className="text-right text-xs font-bold uppercase tracking-wider">Size (SOL)</TableHead>
+            <TableHead className="text-right text-xs font-bold uppercase tracking-wider">Entry</TableHead>
             <TableHead className="text-right text-xs font-bold uppercase tracking-wider">PNL</TableHead>
           </TableRow>
         </TableHeader>
@@ -48,6 +52,7 @@ export function LiveFeedTable({ trades }: { trades: Trade[] }) {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.05 }}
               className="border-border/40 hover:bg-white/5 transition-colors group"
+              data-testid={`row-trade-${trade.id}`}
             >
               <TableCell className="font-mono text-xs text-muted-foreground">
                 {format(new Date(trade.timestamp), "HH:mm:ss")}
@@ -68,6 +73,14 @@ export function LiveFeedTable({ trades }: { trades: Trade[] }) {
                   {trade.mode}
                 </span>
               </TableCell>
+              <TableCell>
+                <Badge variant="outline" className={cn(
+                  "text-[10px] h-5 border-0 font-bold",
+                  trade.tradingMode === "live" ? "bg-destructive/20 text-destructive" : "bg-blue-500/20 text-blue-400"
+                )}>
+                  {trade.tradingMode === "live" ? "LIVE" : "PAPER"}
+                </Badge>
+              </TableCell>
               <TableCell className="text-right font-mono text-sm">{trade.amount}</TableCell>
               <TableCell className="text-right font-mono text-sm text-muted-foreground">${Number(trade.price).toFixed(6)}</TableCell>
               <TableCell className="text-right">
@@ -80,7 +93,7 @@ export function LiveFeedTable({ trades }: { trades: Trade[] }) {
                     {Number(trade.pnl) > 0 ? "+" : ""}{trade.pnl}%
                   </div>
                 ) : (
-                  <span className="text-muted-foreground text-xs">-</span>
+                  <span className="text-muted-foreground text-xs">—</span>
                 )}
               </TableCell>
             </motion.tr>
