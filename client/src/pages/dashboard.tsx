@@ -1,7 +1,7 @@
 import { Layout } from "@/components/layout";
 import { StatCard } from "@/components/stat-card";
 import { LiveFeedTable } from "@/components/live-feed-table";
-import { useBotStatus, useTrades, useCandidates } from "@/hooks/use-bot-data";
+import { useBotStatus, useTrades, useCandidates, useLiveCandidates } from "@/hooks/use-bot-data";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -23,6 +23,7 @@ export default function Dashboard() {
   const { data: status, isLoading: statusLoading, error: statusError } = useBotStatus();
   const { data: trades, isLoading: tradesLoading } = useTrades();
   const { data: candidates, isLoading: candidatesLoading } = useCandidates();
+  const { data: liveCandidates, isLoading: liveLoading } = useLiveCandidates();
   const { toast } = useToast();
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
 
@@ -78,6 +79,7 @@ export default function Dashboard() {
 
   const tradeList = Array.isArray(trades) ? trades : [];
   const candidateList = Array.isArray(candidates) ? candidates : [];
+  const liveList = Array.isArray(liveCandidates) ? liveCandidates : [];
 
   const isRunning = status?.isRunning ?? false;
   const currentMode = status?.mode ?? "IDLE";
@@ -235,6 +237,19 @@ export default function Dashboard() {
               <Flame className="mr-2 h-4 w-4" />
               Sniper Candidates
             </TabsTrigger>
+            <TabsTrigger
+              value="live-scanner"
+              data-testid="tab-live-scanner"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary font-display uppercase tracking-wider"
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Live Scanner
+              {liveList.length > 0 && (
+                <Badge variant="outline" className="ml-2 border-primary/50 text-primary text-[10px] px-1.5 py-0">
+                  {liveList.length}
+                </Badge>
+              )}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="trades" className="space-y-4">
@@ -346,6 +361,140 @@ export default function Dashboard() {
                               </TableCell>
                             </motion.tr>
                           ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="live-scanner" className="space-y-4">
+            <Card className="bg-card/40 border-border/50 backdrop-blur-sm">
+              <CardHeader>
+                <CardTitle className="text-lg font-display uppercase tracking-wider flex items-center gap-2">
+                  <RefreshCw className={cn("h-5 w-5 text-primary", liveLoading && "animate-spin")} />
+                  DexScreener Live Feed
+                  <Badge variant="outline" className="ml-auto text-[10px] border-primary/50 text-primary" data-testid="badge-live-source">
+                    REAL-TIME DATA
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {liveLoading ? (
+                  <div className="h-40 flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-border/50 bg-black/20 backdrop-blur-sm overflow-hidden">
+                    <Table>
+                      <TableHeader className="bg-white/5">
+                        <TableRow className="border-border/50 hover:bg-transparent">
+                          <TableHead className="text-xs font-bold uppercase tracking-wider">Token</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Price</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Liquidity</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Vol 5m</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Buys/Sells</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Δ5m</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Pump%</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Dump%</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Age</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider">Signal</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {liveList.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={10} className="text-center h-24 text-muted-foreground" data-testid="text-no-live">
+                              Connecting to DexScreener API...
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          liveList.map((token: any, i: number) => {
+                            const priceNum = Number(token.price);
+                            const priceStr = priceNum < 0.0001
+                              ? priceNum.toExponential(2)
+                              : priceNum < 1
+                                ? `$${priceNum.toFixed(6)}`
+                                : `$${priceNum.toFixed(2)}`;
+                            const pChange = Number(token.priceChange5m || 0);
+
+                            return (
+                              <motion.tr
+                                key={`${token.tokenAddress}-${i}`}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: i * 0.05 }}
+                                className="border-border/40 hover:bg-white/5 transition-colors"
+                                data-testid={`row-live-${i}`}
+                              >
+                                <TableCell>
+                                  <div className="flex flex-col">
+                                    <span className="font-bold">
+                                      <span className="text-primary">$</span>{token.tokenSymbol}
+                                    </span>
+                                    <span className="text-[10px] text-muted-foreground font-mono">
+                                      {token.tokenAddress?.substring(0, 6)}...{token.tokenAddress?.substring(token.tokenAddress.length - 4)}
+                                    </span>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs">{priceStr}</TableCell>
+                                <TableCell className="text-right font-mono text-sm">
+                                  ${Number(token.liquidity).toLocaleString()}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs">
+                                  ${Number(token.volume5m || 0).toLocaleString()}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs">
+                                  <span className="text-primary">{token.buys5m || 0}</span>
+                                  <span className="text-muted-foreground">/</span>
+                                  <span className="text-destructive">{token.sells5m || 0}</span>
+                                </TableCell>
+                                <TableCell className={cn(
+                                  "text-right font-mono text-xs font-bold",
+                                  pChange > 0 ? "text-primary" : pChange < 0 ? "text-destructive" : "text-muted-foreground"
+                                )}>
+                                  {pChange > 0 ? "+" : ""}{pChange.toFixed(1)}%
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Badge variant="outline" className={cn(
+                                    "border-0 font-bold text-[11px]",
+                                    Number(token.pumpProbability) > 0.7 ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
+                                  )}>
+                                    {(Number(token.pumpProbability) * 100).toFixed(0)}%
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Badge variant="outline" className={cn(
+                                    "border-0 font-bold text-[11px]",
+                                    Number(token.dumpRisk) < 0.3 ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+                                  )}>
+                                    {(Number(token.dumpRisk) * 100).toFixed(0)}%
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                                  {token.ageSeconds < 60
+                                    ? `${token.ageSeconds}s`
+                                    : token.ageSeconds < 3600
+                                      ? `${Math.floor(token.ageSeconds / 60)}m`
+                                      : token.ageSeconds < 86400
+                                        ? `${Math.floor(token.ageSeconds / 3600)}h`
+                                        : `${Math.floor(token.ageSeconds / 86400)}d`
+                                  }
+                                </TableCell>
+                                <TableCell>
+                                  {token.qualifiedMode ? (
+                                    <Badge variant="outline" className="text-[10px] border-primary/50 text-primary animate-pulse">
+                                      {token.qualifiedMode}
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground text-xs">—</span>
+                                  )}
+                                </TableCell>
+                              </motion.tr>
+                            );
+                          })
                         )}
                       </TableBody>
                     </Table>
