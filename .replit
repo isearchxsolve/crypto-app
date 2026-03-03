@@ -10,6 +10,10 @@ packages = ["glibcLocales"]
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 5001
+externalPort = 3000
+
 [env]
 PORT = "5000"
 
@@ -30,6 +34,10 @@ author = "agent"
 task = "workflow.run"
 args = "Start application"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ML Service"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -38,3 +46,15 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[[workflows.workflow]]
+name = "ML Service"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python3 solana_hybrid_sniper_ultra/ml_server.py"
+waitForPort = 5001
+
+[workflows.workflow.metadata]
+outputType = "console"

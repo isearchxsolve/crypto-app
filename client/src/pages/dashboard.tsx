@@ -433,6 +433,11 @@ export default function Dashboard() {
                 <CardTitle className="text-lg font-display uppercase tracking-wider flex items-center gap-2">
                   <RefreshCw className={cn("h-5 w-5 text-primary", liveLoading && "animate-spin")} />
                   DexScreener Live Feed
+                  {engineStats?.mlServiceActive && (
+                    <Badge variant="outline" className="text-[10px] border-cyan-500/50 text-cyan-400 bg-cyan-500/10" data-testid="badge-ml-active">
+                      ML ACTIVE
+                    </Badge>
+                  )}
                   <Badge variant="outline" className="ml-auto text-[10px] border-primary/50 text-primary" data-testid="badge-live-source">
                     REAL-TIME DATA
                   </Badge>
@@ -500,14 +505,19 @@ export default function Dashboard() {
                                   ${Number(token.liquidity).toLocaleString()}
                                 </TableCell>
                                 <TableCell className="text-center">
-                                  <div className={cn(
-                                    "inline-flex items-center gap-1 text-[11px] font-bold font-mono px-2 py-0.5 rounded",
-                                    (token.score || 0) >= 85 ? "bg-primary/20 text-primary" :
-                                    (token.score || 0) >= 70 ? "bg-yellow-500/20 text-yellow-400" :
-                                    (token.score || 0) >= 50 ? "bg-orange-500/20 text-orange-400" :
-                                    "bg-white/5 text-muted-foreground"
-                                  )}>
-                                    {token.score || 0}/100
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <div className={cn(
+                                      "inline-flex items-center gap-1 text-[11px] font-bold font-mono px-2 py-0.5 rounded",
+                                      (token.score || 0) >= 85 ? "bg-primary/20 text-primary" :
+                                      (token.score || 0) >= 70 ? "bg-yellow-500/20 text-yellow-400" :
+                                      (token.score || 0) >= 50 ? "bg-orange-500/20 text-orange-400" :
+                                      "bg-white/5 text-muted-foreground"
+                                    )}>
+                                      {token.score || 0}/100
+                                    </div>
+                                    {token.mlActive && token.mlScore !== null && token.mlScore !== undefined && (
+                                      <span className="text-[9px] font-mono text-cyan-400">ML:{token.mlScore}%</span>
+                                    )}
                                   </div>
                                 </TableCell>
                                 <TableCell className="text-right font-mono text-xs">

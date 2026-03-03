@@ -35,6 +35,10 @@ const SCAN_INTERVAL_MS = 10000;
 const PRICE_CHECK_INTERVAL_MS = 5000;
 const MIN_SCORE_TO_TRADE = 70;
 
+const ML_SERVICE_URL = "http://localhost:5001";
+const ML_WEIGHT = 0.35;
+const SCORE_WEIGHT = 0.65;
+
 let liveCandidatesCache: any[] = [];
 let lastScanTime = 0;
 let tradedAddresses = new Set<string>();
@@ -45,6 +49,134 @@ let balanceInitialized = false;
 let peakPrices = new Map<number, number>();
 let consecutiveWins = 0;
 let consecutiveLosses = 0;
+let mlServiceAvailable = false;
+
+async function checkMLService(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${ML_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2000) });
+    if (resp.ok) {
+      const data = await resp.json() as any;
+      if (!mlServiceAvailable) {
+        console.log(`[ML] Connected to XGBoost model v${data.model_version} (${data.features?.length} features)`);
+      }
+      mlServiceAvailable = true;
+      return true;
+    }
+  } catch {}
+  mlServiceAvailable = false;
+  return false;
+}
+
+function sanitizeNum(v: any, fallback = 0): number {
+  const n = Number(v);
+  return isNaN(n) || !isFinite(n) ? fallback : n;
+}
+
+async function getMLPrediction(metrics: Record<string, number>): Promise<{ pumpProb: number; dumpRisk: number; version: string } | null> {
+  if (!mlServiceAvailable) return null;
+  const liq = sanitizeNum(metrics.liq);
+  if (liq < 500) return null;
+  try {
+    const vol5m = sanitizeNum(metrics.vol5m);
+    const vol1h = sanitizeNum(metrics.vol1h);
+    const volMomentum = vol1h > 0 ? (vol5m * 12) / vol1h : 0;
+    const fdv = sanitizeNum(metrics.fdv);
+
+    const body = {
+      age_seconds: sanitizeNum(metrics.ageSeconds, 99999),
+      liquidity_usd: liq,
+      volume_5m: vol5m,
+      volume_1h: vol1h,
+      volume_change_1m: sanitizeNum(volMomentum),
+      price_change_5m: sanitizeNum(metrics.priceChange5m),
+      price_change_1h: sanitizeNum(metrics.priceChange1h),
+      buy_pressure_5m: sanitizeNum(metrics.buyPressure5m, 0.5),
+      buy_pressure_1h: sanitizeNum(metrics.buyPressure1h, 0.5),
+      buy_sell_ratio: sanitizeNum(metrics.h1buys, 0) / (sanitizeNum(metrics.h1sells, 0) + 0.001),
+      tx_velocity_per_hour: sanitizeNum(metrics.txVelocity5m) * 12,
+      fdv: fdv,
+      liq_to_mcap: fdv > 0 ? liq / fdv : 0,
+    };
+
+    const resp = await fetch(`${ML_SERVICE_URL}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!resp.ok) return null;
+    const data = await resp.json() as any;
+    if (data.error) return null;
+    const pumpProb = Math.max(0, Math.min(1, Number(data.pump_probability) || 0));
+    const dumpRisk = Math.max(0, Math.min(1, Number(data.dump_risk) || 1));
+    return { pumpProb, dumpRisk, version: data.model_version || "unknown" };
+  } catch {
+    return null;
+  }
+}
+
+async function getMLBatchPredictions(tokenMetrics: Record<string, number>[]): Promise<(ReturnType<typeof getMLPrediction> extends Promise<infer T> ? T : never)[]> {
+  if (!mlServiceAvailable || tokenMetrics.length === 0) return tokenMetrics.map(() => null);
+  try {
+    const validIndices: number[] = [];
+    const tokens: any[] = [];
+    for (let i = 0; i < tokenMetrics.length; i++) {
+      const m = tokenMetrics[i];
+      const liq = sanitizeNum(m.liq);
+      if (liq < 500) continue;
+      validIndices.push(i);
+      const vol5m = sanitizeNum(m.vol5m);
+      const vol1h = sanitizeNum(m.vol1h);
+      const volMomentum = vol1h > 0 ? (vol5m * 12) / vol1h : 0;
+      const fdv = sanitizeNum(m.fdv);
+      tokens.push({
+        age_seconds: sanitizeNum(m.ageSeconds, 99999),
+        liquidity_usd: liq,
+        volume_5m: vol5m,
+        volume_1h: vol1h,
+        volume_change_1m: sanitizeNum(volMomentum),
+        price_change_5m: sanitizeNum(m.priceChange5m),
+        price_change_1h: sanitizeNum(m.priceChange1h),
+        buy_pressure_5m: sanitizeNum(m.buyPressure5m, 0.5),
+        buy_pressure_1h: sanitizeNum(m.buyPressure1h, 0.5),
+        buy_sell_ratio: sanitizeNum(m.h1buys, 0) / (sanitizeNum(m.h1sells, 0) + 0.001),
+        tx_velocity_per_hour: sanitizeNum(m.txVelocity5m) * 12,
+        fdv: fdv,
+        liq_to_mcap: fdv > 0 ? liq / fdv : 0,
+      });
+    }
+    if (tokens.length === 0) return tokenMetrics.map(() => null);
+
+    const resp = await fetch(`${ML_SERVICE_URL}/predict/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tokens }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!resp.ok) return tokenMetrics.map(() => null);
+    const data = await resp.json() as any;
+    const preds = data.predictions || [];
+    if (preds.length !== validIndices.length) {
+      console.warn(`[ML] Batch response mismatch: expected ${validIndices.length}, got ${preds.length}`);
+      return tokenMetrics.map(() => null);
+    }
+    const results: any[] = tokenMetrics.map(() => null);
+    for (let j = 0; j < preds.length; j++) {
+      const p = preds[j];
+      if (p.error) continue;
+      results[validIndices[j]] = {
+        pumpProb: Math.max(0, Math.min(1, Number(p.pump_probability) || 0)),
+        dumpRisk: Math.max(0, Math.min(1, Number(p.dump_risk) || 1)),
+        version: p.model_version || "unknown",
+      };
+    }
+    return results;
+  } catch {
+    return tokenMetrics.map(() => null);
+  }
+}
 
 async function fetchTokenPrice(tokenAddress: string): Promise<{ price: number; pair: DexScreenerPair | null }> {
   try {
@@ -63,8 +195,10 @@ async function fetchTokenPrice(tokenAddress: string): Promise<{ price: number; p
   }
 }
 
-function scoreToken(pair: DexScreenerPair): {
+function scoreToken(pair: DexScreenerPair, mlPrediction?: { pumpProb: number; dumpRisk: number; version: string } | null): {
   score: number;
+  mlScore: number | null;
+  combinedScore: number;
   breakdown: Record<string, number>;
   metrics: Record<string, number>;
   qualifiedMode: string | null;
@@ -94,7 +228,7 @@ function scoreToken(pair: DexScreenerPair): {
   const fdv = pair.fdv || 0;
   const mcap = pair.marketCap || 0;
 
-  if (liq < 1000) return { score: 0, breakdown: {}, metrics: {}, qualifiedMode: null, sizeSol: 0, slippage: 0 };
+  if (liq < 1000) return { score: 0, mlScore: null, combinedScore: 0, breakdown: {}, metrics: {}, qualifiedMode: null, sizeSol: 0, slippage: 0 };
 
   let breakdown: Record<string, number> = {};
 
@@ -149,33 +283,46 @@ function scoreToken(pair: DexScreenerPair): {
     m5buys, m5sells, h1buys, h1sells
   };
 
+  const mlScore = mlPrediction ? Math.round(mlPrediction.pumpProb * 100) : null;
+
+  let combinedScore: number;
+  if (mlScore !== null) {
+    combinedScore = Math.round(totalScore * SCORE_WEIGHT + mlScore * ML_WEIGHT);
+    if (mlScore >= 90 && totalScore >= 60) combinedScore = Math.max(combinedScore, totalScore + 10);
+    if (mlScore < 30 && totalScore >= 70) combinedScore = Math.min(combinedScore, totalScore - 10);
+  } else {
+    combinedScore = totalScore;
+  }
+
+  const effectiveScore = combinedScore;
+
   let qualifiedMode: string | null = null;
   let sizeSol = 0;
   let slippage = 2;
 
-  if (ageSeconds < 180 && totalScore >= 60 && buyPressure5m > 0.55 && liq > 1000) {
+  if (ageSeconds < 180 && effectiveScore >= 60 && buyPressure5m > 0.55 && liq > 1000) {
     qualifiedMode = "SNIPER";
     sizeSol = Math.min(1.5, liq / 30000);
     slippage = liq < 20000 ? 15 : 10;
-  } else if (totalScore >= 70 && volMomentum > 1.5 && priceChange5m > 2 && txVelocity5m > 15) {
+  } else if (effectiveScore >= 70 && volMomentum > 1.5 && priceChange5m > 2 && txVelocity5m > 15) {
     qualifiedMode = "MG";
     sizeSol = Math.min(1.0, liq / 50000);
     slippage = 5;
-  } else if (totalScore >= 75 && buyPressure5m > 0.6 && buyPressure1h > 0.55 && liq > 5000) {
+  } else if (effectiveScore >= 75 && buyPressure5m > 0.6 && buyPressure1h > 0.55 && liq > 5000) {
     qualifiedMode = "HWR";
     sizeSol = Math.min(0.8, liq / 80000);
     slippage = 3;
   }
 
-  if (totalScore >= 85) sizeSol *= 1.5;
-  if (totalScore >= 90) sizeSol *= 1.3;
+  if (effectiveScore >= 85) sizeSol *= 1.5;
+  if (effectiveScore >= 90) sizeSol *= 1.3;
 
   if (consecutiveWins >= 3) sizeSol *= 1.2;
   if (consecutiveLosses >= 3) sizeSol *= 0.6;
 
   sizeSol = Math.min(2.0, Math.max(0.01, Math.round(sizeSol * 1000) / 1000));
 
-  return { score: totalScore, breakdown, metrics, qualifiedMode, sizeSol, slippage };
+  return { score: totalScore, mlScore, combinedScore, breakdown, metrics, qualifiedMode, sizeSol, slippage };
 }
 
 async function fetchDexScreenerCandidates(): Promise<any[]> {
@@ -215,26 +362,39 @@ async function fetchDexScreenerCandidates(): Promise<any[]> {
     const results: any[] = [];
     const seenAddresses = new Set<string>();
 
+    const dedupedPairs: DexScreenerPair[] = [];
     for (const sp of allPairs) {
-      const addr = sp.baseToken.address;
-      if (seenAddresses.has(addr)) continue;
-      seenAddresses.add(addr);
+      if (seenAddresses.has(sp.baseToken.address)) continue;
+      seenAddresses.add(sp.baseToken.address);
+      dedupedPairs.push(sp);
+    }
 
+    const pairMetrics = dedupedPairs.map(sp => {
       const scoring = scoreToken(sp);
+      return scoring.metrics;
+    });
+    const mlPredictions = await getMLBatchPredictions(pairMetrics);
+
+    for (let idx = 0; idx < dedupedPairs.length; idx++) {
+      const sp = dedupedPairs[idx];
+      const mlPred = mlPredictions[idx] || null;
+      const scoring = scoreToken(sp, mlPred);
       const liq = sp.liquidity?.usd || 0;
       const createdAt = sp.pairCreatedAt || Date.now();
       const ageSeconds = Math.floor((Date.now() - createdAt) / 1000);
 
       results.push({
-        tokenAddress: addr,
+        tokenAddress: sp.baseToken.address,
         tokenSymbol: sp.baseToken.symbol,
         tokenName: sp.baseToken.name,
         dex: sp.dexId,
         price: sp.priceUsd || "0",
         liquidity: liq.toFixed(0),
-        score: scoring.score,
-        pumpProbability: (scoring.score / 100).toFixed(3),
-        dumpRisk: (1 - scoring.score / 100).toFixed(3),
+        score: scoring.combinedScore,
+        mlScore: scoring.mlScore,
+        ruleScore: scoring.score,
+        pumpProbability: (scoring.combinedScore / 100).toFixed(3),
+        dumpRisk: (1 - scoring.combinedScore / 100).toFixed(3),
         ageSeconds,
         qualifiedMode: scoring.qualifiedMode,
         volume5m: (sp.volume?.m5 || 0).toFixed(0),
@@ -249,6 +409,7 @@ async function fetchDexScreenerCandidates(): Promise<any[]> {
         buyPressure5m: scoring.metrics.buyPressure5m?.toFixed(3) || "0.500",
         fdv: sp.fdv || 0,
         marketCap: sp.marketCap || 0,
+        mlActive: mlPred !== null,
         source: "dexscreener_live",
         timestamp: new Date().toISOString(),
       });
@@ -260,7 +421,8 @@ async function fetchDexScreenerCandidates(): Promise<any[]> {
         const { price, pair } = await fetchTokenPrice(profile.tokenAddress);
         if (!pair) continue;
 
-        const scoring = scoreToken(pair);
+        const mlPred = await getMLPrediction(scoreToken(pair).metrics);
+        const scoring = scoreToken(pair, mlPred);
         const liq = pair.liquidity?.usd || 0;
         const createdAt = pair.pairCreatedAt || Date.now();
         const ageSeconds = Math.floor((Date.now() - createdAt) / 1000);
@@ -273,9 +435,11 @@ async function fetchDexScreenerCandidates(): Promise<any[]> {
           dex: pair.dexId,
           price: pair.priceUsd || "0",
           liquidity: liq.toFixed(0),
-          score: scoring.score,
-          pumpProbability: (scoring.score / 100).toFixed(3),
-          dumpRisk: (1 - scoring.score / 100).toFixed(3),
+          score: scoring.combinedScore,
+          mlScore: scoring.mlScore,
+          ruleScore: scoring.score,
+          pumpProbability: (scoring.combinedScore / 100).toFixed(3),
+          dumpRisk: (1 - scoring.combinedScore / 100).toFixed(3),
           ageSeconds,
           qualifiedMode: scoring.qualifiedMode,
           volume5m: (pair.volume?.m5 || 0).toFixed(0),
@@ -290,6 +454,7 @@ async function fetchDexScreenerCandidates(): Promise<any[]> {
           buyPressure5m: scoring.metrics.buyPressure5m?.toFixed(3) || "0.500",
           fdv: pair.fdv || 0,
           marketCap: pair.marketCap || 0,
+          mlActive: mlPred !== null,
           source: "dexscreener_live",
           timestamp: new Date().toISOString(),
         });
@@ -354,8 +519,9 @@ async function runScanCycle() {
       const { price, pair } = await fetchTokenPrice(candidate.tokenAddress);
       if (!pair || price <= 0) continue;
 
-      const scoring = scoreToken(pair);
-      if (!scoring.qualifiedMode || scoring.score < MIN_SCORE_TO_TRADE || scoring.sizeSol < 0.01) continue;
+      const mlPred = await getMLPrediction(scoreToken(pair).metrics);
+      const scoring = scoreToken(pair, mlPred);
+      if (!scoring.qualifiedMode || scoring.combinedScore < MIN_SCORE_TO_TRADE || scoring.sizeSol < 0.01) continue;
 
       if (status.mode !== "AUTO" && scoring.qualifiedMode !== status.mode) continue;
 
@@ -380,26 +546,28 @@ async function runScanCycle() {
         peakPrice: price.toString(),
         pnl: "0",
         peakPnl: "0",
-        score: scoring.score.toString(),
+        score: scoring.combinedScore.toString(),
         txHash: `paper_${Date.now().toString(36)}_${candidate.tokenAddress.substring(0, 6)}`,
       });
 
       peakPrices.set(trade.id, price);
 
-      console.log(`[SNIPER] BUY $${candidate.tokenSymbol} @ $${price.toFixed(8)} | ${scoring.qualifiedMode} | Score: ${scoring.score}/100 | Size: ${scoring.sizeSol} SOL | Bal: ${paperBalance.toFixed(3)}`);
-      console.log(`  Breakdown: BP=${scoring.breakdown.buyPressure} VM=${scoring.breakdown.volumeMomentum} TR=${scoring.breakdown.trend} TX=${scoring.breakdown.txVelocity} LQ=${scoring.breakdown.liquidity} FR=${scoring.breakdown.freshness} MTF=${scoring.breakdown.multiTimeframe}`);
+      const mlTag = scoring.mlScore !== null ? ` | ML: ${scoring.mlScore}%` : " | ML: offline";
+      console.log(`[SNIPER] BUY $${candidate.tokenSymbol} @ $${price.toFixed(8)} | ${scoring.qualifiedMode} | Score: ${scoring.combinedScore}/100 (Rule:${scoring.score} + ML:${scoring.mlScore ?? 'N/A'}) | Size: ${scoring.sizeSol} SOL | Bal: ${paperBalance.toFixed(3)}`);
+      console.log(`  Breakdown: BP=${scoring.breakdown.buyPressure} VM=${scoring.breakdown.volumeMomentum} TR=${scoring.breakdown.trend} TX=${scoring.breakdown.txVelocity} LQ=${scoring.breakdown.liquidity} FR=${scoring.breakdown.freshness} MTF=${scoring.breakdown.multiTimeframe}${mlTag}`);
 
       const allTrades = await storage.getTrades();
       const closedTrades = allTrades.filter((t: any) => t.status === "CLOSED");
       const wins = closedTrades.filter((t: any) => parseFloat(t.pnl || "0") > 0).length;
       const wr = closedTrades.length > 0 ? ((wins / closedTrades.length) * 100).toFixed(1) : "0";
 
+      const mlLabel = scoring.mlScore !== null ? ` [ML:${scoring.mlScore}%]` : "";
       await storage.updateBotStats({
         walletBalance: paperBalance.toFixed(3),
         totalTrades: allTrades.length,
         openPositions: currentOpenCount,
         winRate: wr,
-        lastSignal: `🎯 BUY $${candidate.tokenSymbol} via ${scoring.qualifiedMode} (Score: ${scoring.score})`,
+        lastSignal: `🎯 BUY $${candidate.tokenSymbol} via ${scoring.qualifiedMode} (Score: ${scoring.combinedScore})${mlLabel}`,
       });
     }
   } catch (e) {
@@ -507,14 +675,24 @@ async function checkOpenPositions() {
   }
 }
 
-function startTradingEngine() {
+async function startTradingEngine() {
   if (scannerInterval) clearInterval(scannerInterval);
   if (priceCheckerInterval) clearInterval(priceCheckerInterval);
 
-  console.log("[ENGINE] ⚡ ULTRA SNIPER ENGINE v3.0 starting...");
+  console.log("[ENGINE] ⚡ ULTRA SNIPER ENGINE v3.0 + ML starting...");
   console.log(`[ENGINE] Trailing Stop: activates +${TRAILING_STOP_ACTIVATION}%, trails ${TRAILING_STOP_DISTANCE}% | Hard TP: +${HARD_TAKE_PROFIT}% | SL: ${STOP_LOSS}%`);
   console.log(`[ENGINE] Max Hold: ${MAX_HOLD_SECONDS}s | Max Positions: ${MAX_OPEN_POSITIONS} | Min Score: ${MIN_SCORE_TO_TRADE}/100`);
+  console.log(`[ENGINE] Score Blend: Rule ${SCORE_WEIGHT * 100}% + ML ${ML_WEIGHT * 100}%`);
   console.log(`[ENGINE] Scan: ${SCAN_INTERVAL_MS / 1000}s | Price Check: ${PRICE_CHECK_INTERVAL_MS / 1000}s`);
+
+  const mlUp = await checkMLService();
+  if (mlUp) {
+    console.log("[ENGINE] ✓ ML Service connected — XGBoost predictions active");
+  } else {
+    console.log("[ENGINE] ⚠ ML Service not available — running on rule-based scoring only");
+  }
+
+  setInterval(checkMLService, 30000);
 
   scannerInterval = setInterval(runScanCycle, SCAN_INTERVAL_MS);
   priceCheckerInterval = setInterval(checkOpenPositions, PRICE_CHECK_INTERVAL_MS);
@@ -593,7 +771,9 @@ export async function registerRoutes(
       consecutiveWins,
       consecutiveLosses,
       paperBalance: paperBalance.toFixed(3),
-      engineVersion: "3.0",
+      engineVersion: "3.0+ML",
+      mlServiceActive: mlServiceAvailable,
+      scoreBlend: `Rule ${SCORE_WEIGHT * 100}% + ML ${ML_WEIGHT * 100}%`,
       trailingStop: `+${TRAILING_STOP_ACTIVATION}% / -${TRAILING_STOP_DISTANCE}%`,
       hardTP: `+${HARD_TAKE_PROFIT}%`,
       stopLoss: `${STOP_LOSS}%`,
