@@ -8,8 +8,9 @@ export interface IStorage {
   getOpenTrades(): Promise<any[]>;
   getCandidates(): Promise<any[]>;
   addTrade(trade: any): Promise<any>;
-  closeTrade(id: number, exitPrice: string, pnl: string): Promise<void>;
+  closeTrade(id: number, exitPrice: string, pnl: string, exitReason?: string): Promise<void>;
   updateTradeCurrentPrice(id: number, currentPrice: string, pnl: string): Promise<void>;
+  updateTradePeakPrice(id: number, peakPrice: string, peakPnl: string): Promise<void>;
   updateTradingMode(mode: string): Promise<any>;
   updateBotRunning(isRunning: boolean): Promise<any>;
   updateStrategyMode(mode: string): Promise<any>;
@@ -24,7 +25,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getTrades(): Promise<any[]> {
-    return await db.select().from(trades).orderBy(desc(trades.timestamp)).limit(50);
+    return await db.select().from(trades).orderBy(desc(trades.timestamp)).limit(100);
   }
 
   async getOpenTrades(): Promise<any[]> {
@@ -40,18 +41,23 @@ export class DatabaseStorage implements IStorage {
     return inserted;
   }
 
-  async closeTrade(id: number, exitPrice: string, pnl: string): Promise<void> {
+  async closeTrade(id: number, exitPrice: string, pnl: string, exitReason?: string): Promise<void> {
     await db.update(trades).set({
       status: "CLOSED",
       type: "SELL",
       exitPrice,
       pnl,
+      exitReason: exitReason || "MANUAL",
       closedAt: new Date(),
     }).where(eq(trades.id, id));
   }
 
   async updateTradeCurrentPrice(id: number, currentPrice: string, pnl: string): Promise<void> {
     await db.update(trades).set({ currentPrice, pnl }).where(eq(trades.id, id));
+  }
+
+  async updateTradePeakPrice(id: number, peakPrice: string, peakPnl: string): Promise<void> {
+    await db.update(trades).set({ peakPrice, peakPnl }).where(eq(trades.id, id));
   }
 
   async updateTradingMode(mode: string): Promise<any> {

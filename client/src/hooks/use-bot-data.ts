@@ -21,7 +21,7 @@ export function useTrades() {
       if (!res.ok) throw new Error("Failed to fetch trades");
       return await res.json();
     },
-    refetchInterval: 3000,
+    refetchInterval: 2000,
   });
 }
 
@@ -45,6 +45,18 @@ export function useLiveCandidates() {
       if (!res.ok) throw new Error("Failed to fetch live candidates");
       return await res.json();
     },
-    refetchInterval: 10000,
+    refetchInterval: 8000,
+  });
+}
+
+export function useEngineStats() {
+  return useQuery({
+    queryKey: ["/api/engine/stats"],
+    queryFn: async () => {
+      const res = await fetch("/api/engine/stats");
+      if (!res.ok) throw new Error("Failed to fetch engine stats");
+      return await res.json();
+    },
+    refetchInterval: 5000,
   });
 }

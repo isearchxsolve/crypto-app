@@ -1,7 +1,7 @@
 import { Layout } from "@/components/layout";
 import { StatCard } from "@/components/stat-card";
 import { LiveFeedTable } from "@/components/live-feed-table";
-import { useBotStatus, useTrades, useCandidates, useLiveCandidates } from "@/hooks/use-bot-data";
+import { useBotStatus, useTrades, useCandidates, useLiveCandidates, useEngineStats } from "@/hooks/use-bot-data";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +24,7 @@ export default function Dashboard() {
   const { data: trades, isLoading: tradesLoading } = useTrades();
   const { data: candidates, isLoading: candidatesLoading } = useCandidates();
   const { data: liveCandidates, isLoading: liveLoading } = useLiveCandidates();
+  const { data: engineStats } = useEngineStats();
   const { toast } = useToast();
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
 
@@ -213,12 +214,14 @@ export default function Dashboard() {
           <StatCard
             label="Wallet Balance"
             value={`${Number(walletBalance).toFixed(3)} SOL`}
+            subValue={engineStats?.totalPnlSol ? `${Number(engineStats.totalPnlSol) >= 0 ? '+' : ''}${Number(engineStats.totalPnlSol).toFixed(4)} SOL profit` : undefined}
             icon={Wallet}
             animate={true}
           />
           <StatCard
             label="Avg PNL"
             value={`${Number(totalPnl) > 0 ? '+' : ''}${Number(totalPnl).toFixed(2)}%`}
+            subValue={engineStats?.avgWinPct ? `W: +${engineStats.avgWinPct}% / L: ${engineStats.avgLossPct}%` : undefined}
             icon={TrendingUp}
             trend={Number(totalPnl) >= 0 ? "up" : "down"}
             color={Number(totalPnl) >= 0 ? "primary" : "destructive"}
@@ -227,7 +230,7 @@ export default function Dashboard() {
           <StatCard
             label="Win Rate"
             value={`${Number(winRate).toFixed(1)}%`}
-            subValue={`${totalTrades} trades`}
+            subValue={`${engineStats?.wins || 0}W / ${engineStats?.losses || 0}L of ${totalTrades}`}
             icon={Trophy}
             color={Number(winRate) >= 50 ? "primary" : "default"}
             animate={true}
@@ -235,12 +238,43 @@ export default function Dashboard() {
           <StatCard
             label="Open Positions"
             value={`${openPositions}`}
-            subValue="max 5"
+            subValue={`max ${8} | streak: ${engineStats?.consecutiveWins ? `${engineStats.consecutiveWins}W` : engineStats?.consecutiveLosses ? `${engineStats.consecutiveLosses}L` : '0'}`}
             icon={Activity}
             color={openPositions > 0 ? "secondary" : "default"}
             animate={true}
           />
         </div>
+
+        {engineStats?.bestTrade && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card className="bg-card/40 border-primary/20 backdrop-blur-sm">
+              <CardContent className="pt-4 pb-3 flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-primary/20 flex items-center justify-center">
+                  <TrendingUp className="h-5 w-5 text-primary" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Best Trade</p>
+                  <p className="text-lg font-bold text-primary font-mono" data-testid="text-best-trade">
+                    +{Number(engineStats.bestTrade.pnl).toFixed(2)}% <span className="text-sm text-muted-foreground">${engineStats.bestTrade.symbol}</span> <span className="text-xs text-muted-foreground/50">{engineStats.bestTrade.mode}</span>
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-card/40 border-destructive/20 backdrop-blur-sm">
+              <CardContent className="pt-4 pb-3 flex items-center gap-3">
+                <div className="h-10 w-10 rounded-lg bg-destructive/20 flex items-center justify-center">
+                  <AlertCircle className="h-5 w-5 text-destructive" />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase tracking-wider">Worst Trade</p>
+                  <p className="text-lg font-bold text-destructive font-mono" data-testid="text-worst-trade">
+                    {Number(engineStats.worstTrade?.pnl || 0).toFixed(2)}% <span className="text-sm text-muted-foreground">${engineStats.worstTrade?.symbol}</span> <span className="text-xs text-muted-foreground/50">{engineStats.worstTrade?.mode}</span>
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         <Tabs defaultValue="trades" className="space-y-4">
           <TabsList className="bg-black/40 border border-border/50 p-1">
@@ -417,11 +451,10 @@ export default function Dashboard() {
                           <TableHead className="text-xs font-bold uppercase tracking-wider">Token</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Price</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Liquidity</TableHead>
+                          <TableHead className="text-xs font-bold uppercase tracking-wider text-center">Score</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Vol 5m</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Buys/Sells</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Δ5m</TableHead>
-                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Pump%</TableHead>
-                          <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Dump%</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider text-right">Age</TableHead>
                           <TableHead className="text-xs font-bold uppercase tracking-wider">Signal</TableHead>
                         </TableRow>
@@ -429,7 +462,7 @@ export default function Dashboard() {
                       <TableBody>
                         {liveList.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={10} className="text-center h-24 text-muted-foreground" data-testid="text-no-live">
+                            <TableCell colSpan={9} className="text-center h-24 text-muted-foreground" data-testid="text-no-live">
                               Connecting to DexScreener API...
                             </TableCell>
                           </TableRow>
@@ -466,6 +499,17 @@ export default function Dashboard() {
                                 <TableCell className="text-right font-mono text-sm">
                                   ${Number(token.liquidity).toLocaleString()}
                                 </TableCell>
+                                <TableCell className="text-center">
+                                  <div className={cn(
+                                    "inline-flex items-center gap-1 text-[11px] font-bold font-mono px-2 py-0.5 rounded",
+                                    (token.score || 0) >= 85 ? "bg-primary/20 text-primary" :
+                                    (token.score || 0) >= 70 ? "bg-yellow-500/20 text-yellow-400" :
+                                    (token.score || 0) >= 50 ? "bg-orange-500/20 text-orange-400" :
+                                    "bg-white/5 text-muted-foreground"
+                                  )}>
+                                    {token.score || 0}/100
+                                  </div>
+                                </TableCell>
                                 <TableCell className="text-right font-mono text-xs">
                                   ${Number(token.volume5m || 0).toLocaleString()}
                                 </TableCell>
@@ -479,22 +523,6 @@ export default function Dashboard() {
                                   pChange > 0 ? "text-primary" : pChange < 0 ? "text-destructive" : "text-muted-foreground"
                                 )}>
                                   {pChange > 0 ? "+" : ""}{pChange.toFixed(1)}%
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <Badge variant="outline" className={cn(
-                                    "border-0 font-bold text-[11px]",
-                                    Number(token.pumpProbability) > 0.7 ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground"
-                                  )}>
-                                    {(Number(token.pumpProbability) * 100).toFixed(0)}%
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="text-right">
-                                  <Badge variant="outline" className={cn(
-                                    "border-0 font-bold text-[11px]",
-                                    Number(token.dumpRisk) < 0.3 ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
-                                  )}>
-                                    {(Number(token.dumpRisk) * 100).toFixed(0)}%
-                                  </Badge>
                                 </TableCell>
                                 <TableCell className="text-right font-mono text-xs text-muted-foreground">
                                   {token.ageSeconds < 60
